@@ -3,6 +3,7 @@ import sys
 import os
 import random
 
+
 # 指定条件
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
@@ -19,6 +20,7 @@ MAX_JUMP = 3
 SPAWN_INTERVAL = 90  # タマゴ生成間隔（フレーム数）
 
 
+
 # =====================
 # 初期化
 # =====================
@@ -27,6 +29,11 @@ screen = pg.display.set_mode((WIDTH, HEIGHT))
 pg.display.set_caption("こうかとん、講義に遅刻する")
 clock = pg.time.Clock()
 font = pg.font.SysFont(None, 32)
+bg_img = pg.image.load("fig/kyanpus.jpg").convert()  #ゴール時にキャンパスの写真表示
+bg_img = pg.transform.scale(bg_img, (WIDTH, HEIGHT))
+gameover_bg = pg.image.load("fig/sensei_okoru.png").convert()  #ゲームオーバー時に先生が起こっている写真表示
+gameover_bg = pg.transform.scale(gameover_bg, (WIDTH, HEIGHT))
+
 
 
 # =====================
@@ -266,6 +273,7 @@ class Egg_Counter:
     def reset(self):
         self.count = 0  # カウントリセット
 
+
 # =====================
 # メイン
 # =====================
@@ -291,6 +299,8 @@ def main():
         state = "play"
         next_stage = False
         current_speed = speed
+        clear_screen = ClearScreen(bg_img, font)
+        gameover_screen = GameOverScreen(gameover_bg, font)
 
         while True:
             # ---------- イベント ----------
@@ -378,7 +388,7 @@ def main():
                 if player.update(grounds) == "fall":
                     state = "gameover"
 
-                # 段差の横衝突
+                # 段差の横衝突                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                
                 for s in steps:
                     if player.rect.colliderect(s.rect):
                         if not (player.rect.bottom <= s.rect.top + 5 and player.vel_y >= 0):
@@ -456,9 +466,10 @@ def main():
 
             screen.blit(font.render(f"STAGE {stage}", True, (0, 0, 0)), (10, 10))
 
-            if state == "gameover":
-                screen.blit(font.render("GAME OVER (R)", True, (255, 0, 0)),
-                            (WIDTH//2 - 100, HEIGHT//2))
+            # 半透明背景用Surface
+            overlay = pg.Surface((WIDTH, HEIGHT))
+            overlay.set_alpha(160)   # 0=完全透明, 255=不透明（150〜180がおすすめ）
+            overlay.fill((255, 255, 255))  # 白
 
             if state == "clear":
                 if teacher_appeared:
@@ -467,6 +478,11 @@ def main():
                     msg = "NEXT STAGE? Y / N"
                 screen.blit(font.render(msg, True, (0, 0, 255)),
                             (WIDTH//2 - 120, HEIGHT//2))
+            if state == "gameover":
+                gameover_screen.draw(screen)
+
+            elif state == "clear":
+                clear_screen.draw(screen)
 
             pg.display.update()
             clock.tick(FPS)
@@ -474,6 +490,90 @@ def main():
             if next_stage:
                 break
 
+
+# =====================
+# ゴール画面クラス
+# =====================
+class ClearScreen:
+    """
+    ゴールの旗に着いた時にゴールの画面を表示するクラス
+    """
+    def __init__(self, bg_img: pg.Surface, font: pg.font.Font) -> None:
+        """
+        screen : pg.Surface描画対象となる画面
+        """
+        self.bg_img = bg_img
+        self.font = font
+
+    def draw(self, screen: pg.Surface) -> None:
+        # 背景
+        screen.blit(self.bg_img, (0, 0))
+
+        # 半透明オーバーレイ
+        overlay = pg.Surface((WIDTH, HEIGHT))
+        overlay.set_alpha(120)
+        overlay.fill((255, 255, 255))
+        screen.blit(overlay, (0, 0))
+
+        # 文字
+        title = self.font.render(
+            "Arrival at campus. Avoid being late!", True, (0, 120, 0)
+        )
+        screen.blit(
+            title,
+            title.get_rect(center=(WIDTH // 2 - 150, HEIGHT // 2 - 80))
+        )
+
+        sub = self.font.render(
+            "The next day?  Y / N", True, (0, 0, 0)
+        )
+        screen.blit(
+            sub,
+            sub.get_rect(center=(WIDTH // 2 - 150, HEIGHT // 2 - 30))
+        )
+
+
+# =====================
+# ゲームオーバー画面クラス
+# =====================
+class GameOverScreen:
+    """
+    段差に当たった時や穴に落ちたときにゲームオーバーを表示させるクラス
+    """
+    def __init__(self, bg_img: pg.Surface, font: pg.font.Font) -> None:
+        """
+        bg_img : ゲームオーバー画面の背景画像
+        font : 文字描画に使用するフォント
+        """
+        self.bg_img = bg_img
+        self.font = font
+
+    def draw(self, screen: pg.Surface) -> None:
+        # 背景
+        screen.blit(self.bg_img, (0, 0))
+
+        # 半透明オーバーレイ
+        overlay = pg.Surface((WIDTH, HEIGHT))
+        overlay.set_alpha(140)
+        overlay.fill((255, 255, 255))
+        screen.blit(overlay, (0, 0))
+
+        # 文字
+        title = self.font.render(
+            "Kokaton is late.....", True, (200, 0, 0)
+        )
+        screen.blit(
+            title,
+            title.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 60))
+        )
+
+        retry = self.font.render(
+            "R : Retry", True, (0, 0, 0)
+        )
+        screen.blit(
+            retry,
+            retry.get_rect(center=(WIDTH // 2, HEIGHT // 2))
+        )
 
 # =====================
 if __name__ == "__main__":
