@@ -18,7 +18,9 @@ GRAVITY = 1
 JUMP_POWER = -18
 MAX_JUMP = 3
 SPAWN_INTERVAL = 90  # タマゴ生成間隔（フレーム数）
-
+WEAPON_MIN_DIST = 300   # 主人公から最低この距離は離す
+WEAPON_MAX_DIST = 900   # これ以上先には出さない
+WEAPON_INTERVAL = 240   # フレーム間隔（4秒）
 
 
 # =====================
@@ -29,6 +31,8 @@ screen = pg.display.set_mode((WIDTH, HEIGHT))
 pg.display.set_caption("こうかとん、講義に遅刻する")
 clock = pg.time.Clock()
 font = pg.font.SysFont(None, 32)
+happy_img = pg.image.load("fig/koukaton_happy.png").convert_alpha()
+happy_img = pg.transform.scale(happy_img, (200, 200))
 bg_img = pg.image.load("fig/kyanpus.jpg").convert()  #ゴール時にキャンパスの写真表示
 bg_img = pg.transform.scale(bg_img, (WIDTH, HEIGHT))
 gameover_bg = pg.image.load("fig/sensei_okoru.png").convert()  #ゲームオーバー時に先生が起こっている写真表示
@@ -46,6 +50,13 @@ class Player(pg.sprite.Sprite):
         self.image = pg.image.load("fig/2.png").convert_alpha()
         self.image = pg.transform.scale(self.image, (48, 48))
         self.rect = self.image.get_rect(midbottom=(150, GROUND_Y))
+        self.vel_y = 0
+        self.jump_count = 0
+        self.weapon_count = 0   # 武器の所持数
+
+    def reset_for_stage(self):
+        """ステージ開始時に位置や落下速度だけリセット（武器数は保持）"""
+        self.rect.midbottom = (150, GROUND_Y)
         self.vel_y = 0
         self.jump_count = 0
 
@@ -75,6 +86,17 @@ class Player(pg.sprite.Sprite):
             self.vel_y = JUMP_POWER
             self.jump_count += 1
 
+    # （将来、敵を実装してから使う用。今は未使用でもOK）
+    def attack(self, enemies, effects):
+        if self.weapon_count <= 0:
+            return
+        attack_rect = pg.Rect(self.rect.right, self.rect.top, 60, self.rect.height)
+        for enemy in enemies[:]:
+            if attack_rect.colliderect(enemy.rect):
+                dead = enemy.take_damage()
+                if dead:
+                    enemies.remove(enemy)
+                    effects.append(AttackEffect(enemy.rect.centerx, enemy.rect.centery))
 
 # =====================
 # 段差
@@ -109,14 +131,20 @@ class GoalFlag:
         self.pole = pg.Rect(x, GROUND_Y - 120, 10, 120)
         self.flag = pg.Rect(x + 10, GROUND_Y - 120, 50, 30)
 
+        # ★ ゴール判定用（画面上まで）
+        self.hitbox = pg.Rect(x - 20, 0, 80, HEIGHT)
+
     def update(self, speed):
         self.pole.x -= speed
         self.flag.x -= speed
+        self.hitbox.x -= speed
 
     def draw(self):
         pg.draw.rect(screen, (200, 200, 200), self.pole)
         pg.draw.rect(screen, (255, 0, 0), self.flag)
-    
+        # デバッグ用（必要なら）
+        # pg.draw.rect(screen, (0,0,255), self.hitbox, 2)
+
 
 # =====================
 # 赤い先生
@@ -144,28 +172,66 @@ class Teacher:
         self.rect = self.image.get_rect(midbottom=(x, GROUND_Y))
 
         self.vel_y = 0
-        self.speed = 8
         self.on_ground = False
         self.jump_timer = 0
 
-    def update(self, grounds):
-        # 前進
-        self.rect.x += self.speed
-        if self.rect.right > WIDTH - 80:
-            self.rect.right = WIDTH - 80
+        self.mode = "enter"        # ★ 状態
+        self.base_speed = 0        # ★ 自分の移動速度
 
-        # 一定周期ジャンプ
+    def update(self, grounds, scroll_speed, speed_boost):
+        RIGHT_LIMIT = WIDTH - 80
+
+        # ===== フェーズ① 登場 =====
+        if self.mode == "enter":
+            self.rect.x += scroll_speed * 1.5  # 少し速め
+            if self.rect.x >= RIGHT_LIMIT:
+                self.rect.x = RIGHT_LIMIT
+                self.mode = "wait"
+
+        # ===== フェーズ② 右端待機 =====
+        # elif self.mode == "wait":
+
+        #     if speed_boost > 0:
+        #         # 加速中：固定せず、世界より遅く流れる
+        #         self.rect.x -= (scroll_speed - scroll_speed * 0.4)
+        #     else:
+        #         # 通常時：右端に張り付く
+        #         self.rect.x = RIGHT_LIMIT
+
+        elif self.mode == "wait":
+            # 通常時は右端に固定
+            self.rect.x = RIGHT_LIMIT
+
+            # 加速が始まったら chase へ
+            if speed_boost > 0:
+                self.mode = "chase"
+
+
+        elif self.mode == "chase":
+            # 加速中：距離が縮まる
+            if speed_boost > 0:
+                self.rect.x -= (scroll_speed - scroll_speed * 0.4)
+            else:
+                # 加速終了 → その場で停止
+                self.mode = "stop"
+
+
+        elif self.mode == "stop":
+            # 再加速したら、また追い詰めフェーズへ
+            if speed_boost > 0:
+                self.mode = "chase"
+
+
+        # ===== 重力・ジャンプ（共通）=====
         self.jump_timer += 1
         if self.jump_timer >= 90 and self.on_ground:
             self.vel_y = JUMP_POWER
             self.on_ground = False
             self.jump_timer = 0
 
-        # 重力
         self.vel_y += GRAVITY
         self.rect.y += self.vel_y
 
-        # 着地
         self.on_ground = False
         for g in grounds:
             if (
@@ -178,9 +244,10 @@ class Teacher:
                 self.on_ground = True
                 break
 
+
+    
     def draw(self):
         screen.blit(self.image, self.rect)
-
 
 
 # =====================
@@ -275,26 +342,117 @@ class Egg_Counter:
 
 
 # =====================
+# 武器
+# =====================
+class WeaponItem:
+    def __init__(self, x):
+        self.image = pg.image.load("fig/buki.png").convert_alpha()
+        self.image = pg.transform.scale(self.image, (40, 40))
+        self.rect = self.image.get_rect(midbottom=(x, GROUND_Y))
+
+    def update(self, speed):
+        self.rect.x -= speed
+
+    def draw(self):
+        screen.blit(self.image, self.rect)
+
+# =====================
+# 攻撃エフェクト
+# =====================
+class AttackEffect:
+    def __init__(self, x, y):
+        self.image = pg.image.load("fig/kougeki.png").convert_alpha()
+        self.image = pg.transform.scale(self.image, (60, 60))
+        self.rect = self.image.get_rect(center=(x, y))
+        self.life = 25
+        self.visible = True
+
+    def update(self):
+        self.life -= 1
+        if self.life % 4 == 0:
+            self.visible = not self.visible
+
+    def draw(self):
+        if self.visible:
+            screen.blit(self.image, self.rect)
+
+# =====================
+# 武器エフェクト
+# =====================
+class WeaponUseEffect:
+    def __init__(self, player):
+        base = pg.image.load("fig/buki.png").convert_alpha()
+        base = pg.transform.scale(base, (40, 40))
+
+        # 45度右に傾ける
+        self.image = pg.transform.rotate(base, -45)
+
+        self.player = player
+
+        self.offset_x = player.rect.width - 3
+        self.offset_y = -5
+
+        self.rect = self.image.get_rect()
+        self.life = 20
+
+        self.update_position()
+
+    def update_position(self):
+        self.rect.centerx = self.player.rect.left + self.offset_x
+        self.rect.centery = self.player.rect.centery + self.offset_y
+
+    def update(self):
+        self.life -= 1
+        self.update_position()  #  毎フレーム追従
+
+    def draw(self):
+        screen.blit(self.image, self.rect)
+
+
+# =====================
 # メイン
 # =====================
 def main():
     stage = 1
     speed = 6
-    goal_distance = 2500
+    goal_distance = 12000
     egg_timer = 0
     eggs = []
     egg_counter = Egg_Counter()
     speed_boost = 0
     boost_frames = FPS*0.5  # 1秒間に画面が更新される回数（フレーム/秒）が0.5倍加速持続時間
+    weapon_spawned = False
+
+    player = Player()  # ★ ここで1回だけ生成（武器数を保持するため）
 
     while True:
-        player = Player()
+        player.reset_for_stage()  # ★ 位置だけリセット（weapon_countは保持）
+
+        weapon_spawned = False
         steps = []
         holes = []
         buses = []
         teachers = []  # 先生リスト
+
+        # ===== 武器の出現数（0〜2個）=====
+        r = random.random()
+        if r < 0.7:
+            weapon_spawn = 1
+        elif r < 0.9:
+            weapon_spawn = 2
+        else:
+            weapon_spawn = 0
+
         teacher_appeared = False
         goal = GoalFlag(goal_distance)
+
+        weapons = []
+        effects = []
+        weapon_effects = []
+        enemies = []
+
+        # ===============================
+
         frame = 0
         state = "play"
         next_stage = False
@@ -313,7 +471,55 @@ def main():
                     if event.key == pg.K_SPACE and state == "play":
                         player.jump()
 
+                    # ===== 攻撃（Enterキー）=====
+                    if event.key == pg.K_RETURN and state == "play":
+                        if player.weapon_count > 0:
+                            # 武器エフェクト
+                            weapon_effects.append(WeaponUseEffect(player))
+
+                            # 攻撃エフェクト
+                            # fx = player.rect.right + 40
+                            # fy = player.rect.centery
+                            # effects.append(AttackEffect(fx, fy))
+
+                            # === 攻撃判定 ===
+                            attack_rect = pg.Rect(
+                                player.rect.right,
+                                player.rect.top - 50,     # 上に広げる
+                                200,                      # 横幅も少し広げる
+                                player.rect.height + 50   # 下にも広げる
+                            )
+
+
+                            # バス破壊
+                            for b in buses[:]:
+                                if attack_rect.colliderect(b.rect):
+                                    buses.remove(b)
+                                    effects.append(
+                                        AttackEffect(b.rect.centerx, b.rect.centery)
+                                    )
+
+                            # === 先生撃破 ===
+                            for t in teachers[:]:
+                                if attack_rect.colliderect(t.rect):
+                                    teachers.remove(t)
+                                    state = "teacher_clear"   # 特別クリア状態へ
+
+                            player.weapon_count -= 1
+
+                    # ============================
+
                     if state == "clear":
+                        if event.key == pg.K_y:
+                            stage += 1
+                            speed += 1
+                            goal_distance += 1500
+                            next_stage = True
+                        if event.key == pg.K_n:
+                            pg.quit()
+                            sys.exit()
+
+                    if state == "teacher_clear":
                         if event.key == pg.K_y:
                             stage += 1
                             speed += 1
@@ -330,9 +536,12 @@ def main():
             if state == "play":
                 frame += 1
 
+                # ===== 段差・穴の生成 =====
                 if frame % 80 == 0:
                     x = WIDTH + 100
-                    if goal.pole.x - x < 200:
+
+                    # ゴール直前は穴を出さない
+                    if goal.hitbox.x - x < 200:
                         steps.append(Step(x))
                     else:
                         if random.random() < 0.5:
@@ -340,27 +549,7 @@ def main():
                         else:
                             holes.append(Hole(x))
 
-                # バスの生成
-                if frame % 300 == 0:  # 一定時間ごとにバスを生成
-                    buses.append(Bus(random.randint(100, WIDTH - 100)))  # ランダムな位置からバスを落下させる
-                if speed_boost > 0:
-                    current_speed = speed * 2
-                    speed_boost -= 1
-                else:
-                    current_speed = speed
-
-                for s in steps:
-                    s.update(current_speed)
-                for h in holes:
-                    h.update(speed)
-                for b in buses:
-                    b.update(speed)
-
-                
-                goal.update(speed)
-                goal.update(current_speed)
-
-                # ===== 地面生成（穴を除外） =====
+                # ===== 地面生成 =====
                 base_grounds = [pg.Rect(0, GROUND_Y, WIDTH, HEIGHT)]
                 teacher_grounds = [pg.Rect(0, GROUND_Y, WIDTH, HEIGHT)]
 
@@ -382,8 +571,66 @@ def main():
 
                 grounds = base_grounds + [s.rect for s in steps]
 
+
+                # ===== 武器生成（確実に出る版）=====
+                if frame % WEAPON_INTERVAL == 0:
+
+                    for _ in range(30):  # 最大30回試行
+                        x = random.randint(
+                            player.rect.right + WEAPON_MIN_DIST,
+                            player.rect.right + WEAPON_MAX_DIST
+                        )
+
+                        weapon_rect = pg.Rect(x - 20, GROUND_Y - 40, 40, 40)
+
+                        ok = True
+
+                        # 段差と重なっていないか
+                        for s in steps:
+                            if weapon_rect.colliderect(s.rect):
+                                ok = False
+                                break
+
+                        # 穴の上でないか
+                        for h in holes:
+                            if weapon_rect.colliderect(h.rect):
+                                ok = False
+                                break
+
+                        # 画面内すぎる場所は禁止（突然出現防止）
+                        if x < WIDTH + 40:
+                            ok = False
+
+                        if ok:
+                            weapons.append(WeaponItem(x))
+                            break
+
+                # バスの生成
+                if frame % 300 == 0:  # 一定時間ごとにバスを生成
+                    buses.append(Bus(random.randint(100, WIDTH - 100)))  # ランダムな位置からバスを落下させる
+                if speed_boost > 0:
+                    current_speed = speed * 2
+                    speed_boost -= 1
+                else:
+                    current_speed = speed
+
+                for s in steps:
+                    s.update(current_speed)
+                for h in holes:
+                    h.update(current_speed)
+                for b in buses:
+                    b.update(current_speed)
+
+                
+                for w in weapons:
+                    w.update(current_speed)
+
+                # goal.update(speed)
+                goal.update(current_speed)
+
                 for t in teachers:
-                    t.update(teacher_grounds)
+                    t.update(teacher_grounds, current_speed, speed_boost)
+
 
                 if player.update(grounds) == "fall":
                     state = "gameover"
@@ -406,7 +653,24 @@ def main():
                 buses = [b for b in buses if b.rect.top < HEIGHT]  # 画面外のバス画像は削除            
 
                 # ゴール
-                if player.rect.colliderect(goal.pole):
+                # ===== 武器取得 =====
+                for w in weapons[:]:
+                    if player.rect.colliderect(w.rect):
+                        player.weapon_count += 1
+                        weapons.remove(w)
+
+                # ===== エフェクト更新 =====
+                for e in effects[:]:
+                    e.update()
+                    if e.life <= 0:
+                        effects.remove(e)
+
+                for we in weapon_effects[:]:
+                    we.update()
+                    if we.life <= 0:
+                        weapon_effects.remove(we)
+
+                if player.rect.colliderect(goal.hitbox):
                     state = "clear"
 
                 # 低確率で先生を出現
@@ -449,7 +713,15 @@ def main():
                 b.draw()
             for t in teachers:  # 先生の描画
                 t.draw()
-                pg.draw.rect(screen, (50, 200, 50), s.rect)
+                # pg.draw.rect(screen, (50, 200, 50), s.rect)
+
+            for w in weapons:
+                w.draw()
+
+            for we in weapon_effects:
+                we.draw()
+            for e in effects:
+                e.draw()
 
             goal.draw()
             screen.blit(player.image, player.rect)
@@ -462,9 +734,10 @@ def main():
             for egg in eggs:
                 egg_counter.draw(screen, font)
                 egg.draw(screen)
-                egg.update(current_speed)
+                # egg.update(current_speed)
 
             screen.blit(font.render(f"STAGE {stage}", True, (0, 0, 0)), (10, 10))
+            screen.blit(font.render(f"WEAPON × {player.weapon_count}", True, (0, 0, 0)), (10, 40))
 
             # 半透明背景用Surface
             overlay = pg.Surface((WIDTH, HEIGHT))
@@ -483,6 +756,23 @@ def main():
 
             elif state == "clear":
                 clear_screen.draw(screen)
+
+            elif state == "teacher_clear":
+                overlay = pg.Surface((WIDTH, HEIGHT))
+                overlay.set_alpha(180)
+                overlay.fill((255, 255, 255))
+                screen.blit(overlay, (0, 0))
+
+                screen.blit(
+                    happy_img,
+                    happy_img.get_rect(center=(WIDTH//2, HEIGHT//2 - 80))
+                )
+
+                msg = font.render("Teacher defeated! Next Stage? Y / N", True, (0, 120, 0))
+                screen.blit(
+                    msg,
+                    msg.get_rect(center=(WIDTH//2, HEIGHT//2 + 80))
+                )
 
             pg.display.update()
             clock.tick(FPS)
